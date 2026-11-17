@@ -3,7 +3,7 @@
 // Tout est chiffré (AES-256-GCM, clé du coffre reçue par le QR code, lui-même chiffré par un code à 8 caractères).
 // Sur le téléphone, l'accès (dépôt, jeton, clé du coffre) est rangé chiffré par TON code à 4-6 chiffres.
 'use strict';
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const API = (() => { try { return localStorage.getItem('ghapi') || 'https://api.github.com'; } catch (_) { return 'https://api.github.com'; } })();
 const ITER = 300000;
 const $ = (s, r = document) => r.querySelector(s);
@@ -54,6 +54,12 @@ const autonome = matchMedia('(display-mode: standalone)').matches || navigator.s
 async function demarrer() {
   if (!window.crypto || !crypto.subtle) { $('#app').innerHTML = `<div class="plein"><h1>Navigateur non compatible</h1><p>Ouvre cette page dans Safari (iPhone) ou Chrome (Android).</p></div>`; return; }
   const stocke = LS.get('acces', null);
+  if (!lienEnAttente && !stocke) { const m = document.cookie.match(/(?:^|; )trousseau_a=([A-Za-z0-9_-]+)/); if (m) lienEnAttente = m[1]; }
+  if (lienEnAttente && estIOS && !autonome) {
+    // garder le lien pour l'icône de l'écran d'accueil (iOS copie les cookies ; sans manifeste, l'icône garde l'adresse)
+    try { document.cookie = 'trousseau_a=' + lienEnAttente + '; max-age=3600; path=/; secure; samesite=strict'; } catch (_) {}
+    const man = document.querySelector('link[rel=manifest]'); if (man) man.remove();
+  }
   if (lienEnAttente) {
     const e = await empreinte(lienEnAttente);
     if (!stocke || stocke.lien !== e) return ecranAssociation(stocke);
@@ -66,7 +72,65 @@ function ecranAccueil() {
   $('#feuille').innerHTML = '';
   $('#app').innerHTML = `<div class="plein"><img src="icon-192.png" alt=""><h1>Trousseau</h1>
     <p>Tes clés API et tes adresses, sur ton téléphone.</p>
-    <div class="etapes"><div>1. Sur ton PC, ouvre <b>Trousseau › Réglages › Téléphone et synchro</b>.</div><div>2. Clique sur <b>Associer un téléphone</b>.</div><div>3. Scanne le QR code avec l’appareil photo, puis tape le code affiché.</div></div></div>`;
+    <div class="etapes"><div>1. Sur ton PC, ouvre <b>Trousseau › Réglages › Téléphone et synchro</b>.</div><div>2. Clique sur <b>Associer un téléphone</b>.</div><div>3. Touche <b>Scanner le QR code</b> ci-dessous et vise l’écran du PC.</div></div>
+    <button class="btn prim" id="scanner" style="width:100%;max-width:330px;flex:none">${ic('appareil')} Scanner le QR code</button>
+    <button class="lien-bas" id="coller">Coller le lien d’association</button></div>`;
+  $('#scanner').onclick = scanner;
+  $('#coller').onclick = collerLien;
+}
+
+// Reçoit un lien d'association (scanné, collé ou ouvert) et passe à l'écran du code.
+function recevoirLien(texte) {
+  const a = (String(texte || '').match(/#a=([A-Za-z0-9_-]{40,})/) || [])[1];
+  if (!a) return false;
+  lienEnAttente = a; LS.set('ignoreEcran', true);
+  try { history.replaceState(null, '', location.pathname + '#a=' + a); } catch (_) {}
+  demarrer(); return true;
+}
+
+function collerLien() {
+  $('#app').innerHTML = `<div class="plein"><img src="icon-192.png" alt=""><h1>Coller le lien</h1>
+    <p>Sur ton PC, clique sur <b>Copier le lien</b> sous le QR code, envoie-le sur ton téléphone, puis colle-le ici.</p>
+    <textarea class="champ" id="lien" rows="4" placeholder="https://oiriaure.github.io/trousseau-mobile/#a=…" autocomplete="off" autocapitalize="off" spellcheck="false" style="font-size:14px;letter-spacing:0;text-transform:none;text-align:left"></textarea>
+    <div class="erreur" id="err"></div>
+    <button class="btn prim" id="ok" style="width:100%;max-width:330px;flex:none">Continuer</button>
+    <button class="lien-bas" id="retour">Retour</button></div>`;
+  $('#ok').onclick = () => { if (!recevoirLien($('#lien').value)) { $('#err').textContent = 'Ce n’est pas un lien d’association Trousseau.'; vibrer(80); } };
+  $('#retour').onclick = demarrer;
+}
+
+// ---- lecture du QR code avec l'appareil photo (jsQR, tout se passe sur le téléphone)
+let flux = null;
+function arreterCamera() { if (flux) { flux.getTracks().forEach(t => t.stop()); flux = null; } }
+async function scanner() {
+  $('#app').innerHTML = `<div class="plein scan"><h1>Vise le QR code</h1><p>Celui affiché sur ton PC, dans Associer un téléphone.</p>
+    <div class="cadre"><video id="video" playsinline muted autoplay></video><span></span></div>
+    <div class="erreur" id="err"></div>
+    <button class="lien-bas" id="coller">Coller le lien à la place</button><button class="lien-bas" id="annuler">Annuler</button></div>`;
+  $('#annuler').onclick = () => { arreterCamera(); demarrer(); };
+  $('#coller').onclick = () => { arreterCamera(); collerLien(); };
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('#err').textContent = 'Appareil photo indisponible ici : colle le lien à la place.'; return; }
+  try { flux = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }); }
+  catch (_) { $('#err').textContent = 'Accès à l’appareil photo refusé. Autorise-le dans les réglages du téléphone, ou colle le lien.'; return; }
+  const v = $('#video'); if (!v) return arreterCamera();
+  v.srcObject = flux; try { await v.play(); } catch (_) {}
+  const c = document.createElement('canvas'), x = c.getContext('2d', { willReadFrequently: true });
+  const tour = () => {
+    if (!flux || !document.body.contains(v)) return arreterCamera();
+    if (v.videoWidth) {
+      const k = Math.min(1, 720 / Math.max(v.videoWidth, v.videoHeight));
+      c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k);
+      x.drawImage(v, 0, 0, c.width, c.height);
+      const im = x.getImageData(0, 0, c.width, c.height);
+      const r = window.jsQR && jsQR(im.data, im.width, im.height, { inversionAttempts: 'attemptBoth' });
+      if (r && r.data) {
+        if (/#a=/.test(r.data)) { vibrer(40); arreterCamera(); recevoirLien(r.data); return; }
+        $('#err').textContent = 'Ce QR code n’est pas celui de Trousseau.';
+      }
+    }
+    setTimeout(tour, 200);
+  };
+  tour();
 }
 
 // ---- association : code à 8 caractères, puis choix du code du téléphone
@@ -74,7 +138,7 @@ function ecranAssociation(stocke) {
   if (estIOS && !autonome && !LS.get('ignoreEcran', false)) {
     $('#app').innerHTML = `<div class="plein"><img src="icon-192.png" alt=""><h1>Installe d’abord Trousseau</h1>
       <p>Sur iPhone, l’app de l’écran d’accueil a sa propre mémoire : fais l’association depuis l’icône.</p>
-      <div class="etapes"><div>1. Touche le bouton <b>Partager</b> (le carré avec la flèche) en bas de Safari.</div><div>2. Choisis <b>Sur l’écran d’accueil</b>, puis <b>Ajouter</b>.</div><div>3. Ouvre <b>Trousseau</b> depuis l’icône et tape le code affiché sur ton PC.</div></div>
+      <div class="etapes"><div>1. Touche le bouton <b>Partager</b> (le carré avec la flèche) en bas de Safari.</div><div>2. Choisis <b>Sur l’écran d’accueil</b>, puis <b>Ajouter</b>.</div><div>3. Ouvre <b>Trousseau</b> depuis l’icône, touche <b>Scanner le QR code</b> et vise de nouveau l’écran du PC.</div></div>
       <button class="lien-bas" id="continuer">Continuer dans Safari quand même</button></div>`;
     $('#continuer').onclick = () => { LS.set('ignoreEcran', true); ecranAssociation(stocke); };
     return;
@@ -114,7 +178,7 @@ function choisirCode(acces, changement) {
     const ancien = LS.get('acces', {});
     LS.set('acces', { v: 1, s: b64u(sel), iv: boite.iv, c: boite.c, lien: changement ? ancien.lien : (lienEnAttente ? await empreinte(lienEnAttente) : ancien.lien), associe: changement ? ancien.associe : Date.now(), n: acces.n });
     LS.set('essais', 0);
-    if (!changement) { LS.del('fichiers'); U.etag = null; }
+    if (!changement) { LS.del('fichiers'); U.etag = null; try { document.cookie = 'trousseau_a=; max-age=0; path=/'; history.replaceState(null, '', location.pathname); } catch (_) {} }
     lienEnAttente = null;
     await ouvrir(acces);
     toast(changement ? 'Code changé' : 'Téléphone associé');

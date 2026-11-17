@@ -109,3 +109,8 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
 .tirer { text-align: center; color: var(--doux); font-size: 13px; height: 0; overflow: hidden; transition: height .15s; }
 select.choix { background: none; border: 0; color: var(--doux); font: inherit; text-align: right; appearance: none; }
+
+.scan .cadre { position: relative; width: min(78vw, 320px); aspect-ratio: 1; border-radius: 22px; overflow: hidden; background: #000; }
+.scan video { width: 100%; height: 100%; object-fit: cover; }
+.scan .cadre span { position: absolute; inset: 14%; border: 3px solid rgba(255,255,255,.85); border-radius: 14px; box-shadow: 0 0 0 999px rgba(0,0,0,.25); }
+textarea.champ { resize: none; }
