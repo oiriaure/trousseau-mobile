@@ -3,7 +3,7 @@
 // Tout est chiffré (AES-256-GCM, clé du coffre reçue par le QR code, lui-même chiffré par un code à 8 caractères).
 // Sur le téléphone, l'accès (dépôt, jeton, clé du coffre) est rangé chiffré par TON code à 4-6 chiffres.
 'use strict';
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const API = (() => { try { return localStorage.getItem('ghapi') || 'https://api.github.com'; } catch (_) { return 'https://api.github.com'; } })();
 const ITER = 300000;
 const $ = (s, r = document) => r.querySelector(s);
@@ -72,7 +72,7 @@ function ecranAccueil() {
   $('#feuille').innerHTML = '';
   $('#app').innerHTML = `<div class="plein"><img src="icon-192.png" alt=""><h1>Trousseau</h1>
     <p>Tes clés API et tes adresses, sur ton téléphone.</p>
-    <div class="etapes"><div>1. Sur ton PC, ouvre <b>Trousseau › Réglages › Téléphone et synchro</b>.</div><div>2. Clique sur <b>Associer un téléphone</b>.</div><div>3. Touche <b>Scanner le QR code</b> ci-dessous et vise l’écran du PC.</div></div>
+    <div class="etapes"><div>1. Sur ton PC, ouvre <b>Trousseau › Réglages › Synchro</b>.</div><div>2. Clique sur <b>Associer</b> (Téléphone).</div><div>3. Touche <b>Scanner le QR code</b> ci-dessous et vise l’écran du PC.</div></div>
     <button class="btn prim" id="scanner" style="width:100%;max-width:330px;flex:none">${ic('appareil')} Scanner le QR code</button>
     <button class="lien-bas" id="coller">Coller le lien d’association</button></div>`;
   $('#scanner').onclick = scanner;

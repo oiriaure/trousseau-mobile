@@ -1,12 +1,16 @@
 /* Trousseau — téléphone. Style « app native » : grands titres, listes groupées, onglets en bas, feuilles. */
 :root {
   --fond: #f2f2f7; --carte: #ffffff; --carte2: #e9e9ef; --sep: #d8d8de; --txt: #111114; --doux: #6c6c72; --tres-doux: #a1a1a8;
-  --bleu: #3a63f0; --vert: #22a06b; --orange: #c47a06; --rouge: #e0383e; --barre: rgba(249,249,251,.86);
+  --bleu: #3a63f0; --vert: #22a06b; --orange: #c47a06; --rouge: #e0383e; --barre: rgba(250,251,255,.84);
+  --fond-art: radial-gradient(520px 420px at 0% 0%, #8ea8ff66, transparent 65%), radial-gradient(480px 400px at 100% 10%, #d3c4ff66, transparent 65%), radial-gradient(560px 480px at 60% 100%, #8af0dc55, transparent 65%), linear-gradient(180deg, #f4f6fb, #eaeef6);
+  --verre: rgba(255,255,255,.62); --verre2: rgba(255,255,255,.8); --trait: rgba(25,35,70,.08); --reflet: inset 0 1px 0 rgba(255,255,255,.95);
   --haut: env(safe-area-inset-top, 0px); --bas: env(safe-area-inset-bottom, 0px);
 }
 @media (prefers-color-scheme: dark) {
   :root { --fond: #000000; --carte: #1c1c1e; --carte2: #2c2c2e; --sep: #38383a; --txt: #f5f5f7; --doux: #98989f; --tres-doux: #636366;
-    --bleu: #5b82ff; --vert: #34c77b; --orange: #f2a93b; --rouge: #ff5a5f; --barre: rgba(22,22,24,.86); }
+    --bleu: #5b82ff; --vert: #34c77b; --orange: #f2a93b; --rouge: #ff5a5f; --barre: rgba(24,27,36,.84);
+    --fond-art: radial-gradient(520px 420px at 0% 0%, #2f55ff4d, transparent 65%), radial-gradient(480px 400px at 100% 10%, #8b5cf640, transparent 65%), radial-gradient(560px 480px at 60% 100%, #10b9a333, transparent 65%), linear-gradient(180deg, #0b0e15, #07080c);
+    --verre: rgba(40,45,60,.5); --verre2: rgba(58,64,82,.6); --trait: rgba(255,255,255,.08); --reflet: inset 0 1px 0 rgba(255,255,255,.07); }
 }
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 html, body { height: 100%; background: var(--fond); color: var(--txt); }
@@ -114,3 +118,24 @@ select.choix { background: none; border: 0; color: var(--doux); font: inherit; t
 .scan video { width: 100%; height: 100%; object-fit: cover; }
 .scan .cadre span { position: absolute; inset: 14%; border: 3px solid rgba(255,255,255,.85); border-radius: 14px; box-shadow: 0 0 0 999px rgba(0,0,0,.25); }
 textarea.champ { resize: none; }
+
+/* ---------- Liquid Glass : fond fixe, cartes translucides sans flou, flou seulement sur les barres et la feuille (opaques à ≥ 84 %) */
+html { background: var(--fond); } body { background: transparent; }
+body::before { content: ""; position: fixed; inset: 0; background: var(--fond-art); z-index: -1; pointer-events: none; }
+.groupe, .secret, .btn, .puce, .pave button, .champ { background: var(--verre); box-shadow: var(--reflet), 0 0 0 .5px var(--trait); }
+.recherche input { background: var(--verre); box-shadow: var(--reflet), 0 0 0 .5px var(--trait); }
+.puce.on { background: var(--bleu); box-shadow: none; }
+.btn.prim { background: linear-gradient(180deg, #6a8cff, #3f66f5); box-shadow: inset 0 1px 0 rgba(255,255,255,.3), 0 6px 18px rgba(63,102,245,.3); }
+.groupe { border-radius: 18px; }
+.btn { border-radius: 16px; }
+.entete h1, .plein h1, .tete h2 { letter-spacing: -.6px; }
+.entete h1 { font-weight: 800; }
+.badge, .av { box-shadow: inset 0 1px 0 rgba(255,255,255,.3), 0 2px 8px rgba(0,0,0,.15); }
+.onglets { left: 14px; right: 14px; bottom: calc(var(--bas) + 10px); border-radius: 30px; border: 0; padding: 6px; box-shadow: var(--reflet), 0 0 0 .5px var(--trait), 0 12px 32px rgba(0,0,0,.25); }
+.onglets button { border-radius: 24px; padding: 5px 0; }
+.onglets button.on { background: var(--verre2); }
+.ecran { padding-bottom: calc(var(--bas) + 110px); }
+.toast { bottom: calc(var(--bas) + 100px); }
+.sheet { background: var(--barre); -webkit-backdrop-filter: blur(36px) saturate(170%); backdrop-filter: blur(36px) saturate(170%); border-radius: 26px 26px 0 0; box-shadow: var(--reflet), 0 -10px 40px rgba(0,0,0,.25); }
+.voile { background: rgba(0,0,0,.35); }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { :root { --barre: var(--fond); } }
