@@ -3,10 +3,10 @@
   // Ordre important pour la détection : les motifs les plus précis d'abord.
   const B = '(?<![A-Za-z0-9_\\-])', F = '(?![A-Za-z0-9_\\-])';
   const SERVICES = [
-    { id: 'gemini', nom: 'Google Gemini', court: 'Gemini', couleur: '#4285F4', lettre: 'G', env: 'GEMINI_API_KEY',
-      page: 'https://aistudio.google.com/apikey', motif: new RegExp(B + 'AIza[0-9A-Za-z_\\-]{35}' + F),
+    { id: 'gemini', nom: 'Google Gemini', court: 'Gemini', couleur: '#4285F4', lettre: 'G', icone: 'ic-gemini.png', env: 'GEMINI_API_KEY',
+      page: 'https://aistudio.google.com/apikey', motif: new RegExp(B + '(?:AIza[0-9A-Za-z_\\-]{35}|AQ\\.[A-Za-z0-9_\\-]{40,})' + F),
       etapes: ['Connecte-toi avec cette adresse si on te le demande', 'Clique sur « Create API key » (« Créer une clé API »)', 'Clique sur l’icône Copier à côté de la clé'] },
-    { id: 'anthropic', nom: 'Anthropic (Claude)', court: 'Claude', couleur: '#D97757', lettre: 'A', env: 'ANTHROPIC_API_KEY',
+    { id: 'anthropic', nom: 'Anthropic (Claude)', court: 'Claude', couleur: '#D97757', lettre: 'A', icone: 'ic-anthropic.png', env: 'ANTHROPIC_API_KEY',
       page: 'https://console.anthropic.com/settings/keys', motif: new RegExp(B + 'sk-ant-[A-Za-z0-9_\\-]{20,}'),
       etapes: ['Connecte-toi avec cette adresse', 'Clique sur « Create Key » et donne-lui un nom', 'Copie la clé affichée (elle ne s’affiche qu’une fois)'] },
     { id: 'openrouter', nom: 'OpenRouter', court: 'OpenRouter', couleur: '#6467F2', lettre: 'R', env: 'OPENROUTER_API_KEY',
@@ -42,7 +42,7 @@
     { id: 'replicate', nom: 'Replicate', court: 'Replicate', couleur: '#EA2805', lettre: 'R', env: 'REPLICATE_API_TOKEN',
       page: 'https://replicate.com/account/api-tokens', motif: new RegExp(B + 'r8_[A-Za-z0-9]{30,}'),
       etapes: ['Connecte-toi avec cette adresse', 'Clique sur « Create token »', 'Copie le jeton'] },
-    { id: 'github', nom: 'GitHub', court: 'GitHub', couleur: '#6E7681', lettre: 'H', env: 'GITHUB_TOKEN',
+    { id: 'github', nom: 'GitHub', court: 'GitHub', couleur: '#6E7681', lettre: 'H', icone: 'ic-github.png', env: 'GITHUB_TOKEN',
       page: 'https://github.com/settings/personal-access-tokens/new', motif: new RegExp(B + '(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,})'),
       etapes: ['Connecte-toi avec cette adresse', 'Choisis « No expiration » et les dépôts, puis « Generate token »', 'Copie le jeton'] },
     { id: 'huggingface', nom: 'Hugging Face', court: 'Hugging Face', couleur: '#FFB000', lettre: 'F', env: 'HF_TOKEN',
@@ -88,26 +88,56 @@
   }
 
   // Lit un fichier .env ou un texte : une entrée par clé trouvée (reconnue par son format ou son nom).
+  // Nom lisible tiré d'une étiquette : « Jeton GitHub Boussole » → « Boussole », « Cerveau obsidian (Claude) » → « Cerveau obsidian ».
+  const L = '(?<![\\p{L}\\p{N}_])', R = '(?![\\p{L}\\p{N}_])';
+  const MOTS_VIDES = new RegExp(L + '(?:cl[ée]s?|api|jetons?|tokens?|keys?|secrets?|personal access|pat|google|anthropic|openai|github)' + R, 'giu');
+  function nettoyer(et) {
+    let t = String(et || '').replace(/\([^)]*\)/g, ' ').replace(/[:=]+\s*$/, '');
+    for (const sv of SERVICES) for (const mot of [sv.nom, sv.court]) if (mot && mot.length > 2) t = t.replace(new RegExp(L + mot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + R, 'giu'), ' ');
+    t = t.replace(MOTS_VIDES, ' ').replace(/\s+/g, ' ').replace(/^[\s,;\-–—:]+|[\s,;\-–—:]+$/g, '');
+    return t ? t[0].toUpperCase() + t.slice(1) : '';
+  }
+
+  // Lit un fichier .env ou un texte (notes, document Word copié) : une entrée par clé trouvée.
+  // Les lignes sans clé servent d'étiquettes : un titre (« Jeton GitHub Boussole ») suivi d'un sous-titre (« Jeton téléphone »)
+  // donne le nom « Boussole – téléphone » et l'usage « Boussole ». « Clé API Atelier : AQ.… » donne le nom « Atelier ».
   function lireTexte(texte) {
     const vus = new Set(), sortie = [];
+    let titre = '', sous = '', derniereEtiquette = false;
     for (const ligne of String(texte || '').split(/\r?\n/)) {
       const l = ligne.trim();
-      if (!l || l.startsWith('#')) continue;
+      if (!l) continue;
+      if (l.startsWith('#')) { const e = l.replace(/^#+\s*/, ''); if (e && !detecter(e)) { titre = e; sous = ''; derniereEtiquette = true; } continue; }
       const m = l.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[=:]\s*["']?([^"'\s]+)["']?/);
-      let service = null, valeur = null, nom = null;
+      let service = null, valeur = null, variable = null, etiquette = '';
       if (m) {
-        nom = m[1]; valeur = m[2];
-        const d = detecter(valeur); const e = serviceParEnv(nom);
+        variable = m[1]; valeur = m[2];
+        const d = detecter(valeur); const e = serviceParEnv(variable);
         service = d ? d.service : e ? e.id : null;
         if (d) valeur = d.valeur;
-        if (!service && !/KEY|TOKEN|SECRET/i.test(nom)) continue;
+        if (!service && !/KEY|TOKEN|SECRET/i.test(variable)) continue;
       } else {
-        const d = detecter(l); if (!d) continue;
+        const d = detecter(l);
+        if (!d) {   // ligne sans clé = étiquette
+          if (l.length <= 80) { if (derniereEtiquette && sous) titre = sous; sous = l; derniereEtiquette = true; }
+          continue;
+        }
         service = d.service; valeur = d.valeur;
+        const avant = l.slice(0, l.indexOf(d.valeur)).trim();
+        if (avant.length > 1) etiquette = avant;
       }
-      if (!valeur || valeur.length < 12 || vus.has(valeur)) continue;
+      if (!valeur || valeur.length < 12 || vus.has(valeur)) { derniereEtiquette = false; continue; }
       vus.add(valeur);
-      sortie.push({ service: service || 'autre', valeur, variable: nom });
+      let nom = '', usage = '';
+      if (etiquette) { nom = nettoyer(etiquette); usage = nom; }
+      else if (variable) { nom = ''; }
+      else {
+        const t = nettoyer(titre), so = nettoyer(sous);
+        if (t && so && t.toLowerCase() !== so.toLowerCase()) { nom = t + ' – ' + so.toLowerCase(); usage = t; }
+        else { nom = so || t; usage = t || ''; }
+      }
+      sortie.push({ service: service || 'autre', valeur, variable, nom: nom.slice(0, 60), usage: usage.slice(0, 60) });
+      derniereEtiquette = false;
     }
     return sortie;
   }

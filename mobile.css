@@ -139,3 +139,4 @@ body::before { content: ""; position: fixed; inset: 0; background: var(--fond-ar
 .sheet { background: var(--barre); -webkit-backdrop-filter: blur(36px) saturate(170%); backdrop-filter: blur(36px) saturate(170%); border-radius: 26px 26px 0 0; box-shadow: var(--reflet), 0 -10px 40px rgba(0,0,0,.25); }
 .voile { background: rgba(0,0,0,.35); }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { :root { --barre: var(--fond); } }
+img.badge { object-fit: cover; background: none; }

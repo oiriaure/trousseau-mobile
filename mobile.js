@@ -3,7 +3,7 @@
 // Tout est chiffré (AES-256-GCM, clé du coffre reçue par le QR code, lui-même chiffré par un code à 8 caractères).
 // Sur le téléphone, l'accès (dépôt, jeton, clé du coffre) est rangé chiffré par TON code à 4-6 chiffres.
 'use strict';
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const API = (() => { try { return localStorage.getItem('ghapi') || 'https://api.github.com'; } catch (_) { return 'https://api.github.com'; } })();
 const ITER = 300000;
 const $ = (s, r = document) => r.querySelector(s);
@@ -38,6 +38,7 @@ let lienEnAttente = (location.hash.match(/#a=([A-Za-z0-9_-]+)/) || [])[1] || nul
 let derniereActivite = Date.now(), cacheA = 0;
 
 const serv = id => CAT.service(id);
+const pastille = (s, cl = '') => s.icone ? `<img class="badge ${cl}" src="${esc(s.icone)}" alt="">` : `<div class="badge ${cl}" style="background:${s.couleur}">${esc(s.lettre)}</div>`;
 const compte = id => DON.comptes.find(c => c.id === id);
 const pluriel = (n, m) => n + ' ' + m + (n > 1 ? 's' : '');
 function depuis(t) {
@@ -228,12 +229,18 @@ function ecranVerrou() {
   p.bas('<button class="lien-bas" id="oubli">Code oublié ?</button>');
   $('#oubli').onclick = () => { if (confirm('Effacer l’association de ce téléphone ? Tu pourras la refaire en scannant le QR code sur ton PC.')) { oublier(); } };
 }
-function oublier() { LS.del('acces'); LS.del('fichiers'); LS.del('essais'); ACCES = null; CLE = null; ecranAccueil(); }
+function oublier() {
+  if (LS.get('notif', null) && ACCES && ACCES.t && CLE) {   // retirer l'abonnement du dépôt
+    const A = ACCES, K = CLE;
+    ecrireMonFichier({}, A, K).catch(() => {});
+    if ('serviceWorker' in navigator) navigator.serviceWorker.ready.then(r => r.pushManager.getSubscription()).then(s => s && s.unsubscribe()).catch(() => {});
+  }
+  LS.del('notif'); LS.del('tel'); LS.del('acces'); LS.del('fichiers'); LS.del('essais'); ACCES = null; CLE = null; ecranAccueil(); }
 
 // ------------------------------------------------------------------ données
 async function ouvrir(acces) {
   ACCES = acces;
-  CLE = await crypto.subtle.importKey('raw', deb64u(acces.k), 'AES-GCM', false, ['decrypt']);
+  CLE = await crypto.subtle.importKey('raw', deb64u(acces.k), 'AES-GCM', false, ['encrypt', 'decrypt']);
   derniereActivite = Date.now();
   document.onkeydown = null;
   await calculer();
@@ -245,9 +252,12 @@ async function ouvrir(acces) {
 // Fusion de tous les appareils : pour chaque rubrique, la plus récente gagne.
 async function calculer() {
   const fichiers = LS.get('fichiers', {}), R = {}, appareils = [];
+  let vapid = null;
   for (const [chemin, f] of Object.entries(fichiers)) {
     if (!f || !f.contenu || !f.contenu.chiffre) continue;
     let rub; try { rub = await dechiffrer(CLE, f.contenu.chiffre); } catch (_) { continue; }
+    const pv = rub['p:vapid']; if (pv && pv.v && pv.v.pub && (!vapid || pv.t < vapid.t || (pv.t === vapid.t && pv.v.pub < vapid.pub))) vapid = { t: pv.t, pub: pv.v.pub };
+    if (f.contenu.device === monId()) continue;   // notre propre fichier (abonnement aux notifications)
     appareils.push({ nom: f.contenu.nom, platform: f.contenu.platform, updated: f.contenu.updated, version: f.contenu.version, fichier: chemin.startsWith('fichier:') });
     for (const [rk, x] of Object.entries(rub)) if (x && (!R[rk] || x.t > R[rk].t)) R[rk] = x;
   }
@@ -259,7 +269,7 @@ async function calculer() {
   }
   comptes.sort((a, b) => (b.epingle - a.epingle) || (a.nom || a.email).localeCompare(b.nom || b.email, 'fr'));
   cles.sort((a, b) => (b.favori - a.favori) || a.nom.localeCompare(b.nom, 'fr'));
-  DON = { comptes, cles, appareils, maj: Math.max(0, ...appareils.map(a => a.updated || 0)) };
+  DON = { comptes, cles, appareils, vapid: vapid && vapid.pub, maj: Math.max(0, ...appareils.map(a => a.updated || 0)) };
 }
 
 async function gh(chemin, brut, entetes) {
@@ -291,6 +301,7 @@ async function actualiser(discret) {
     for (const p of Object.keys(fichiers)) if (!p.startsWith('fichier:') && !presents.has(p)) { delete fichiers[p]; change = true; }
     LS.set('fichiers', fichiers);
     if (change) { await calculer(); rendre(); }
+    if (etatNotif().code === 'renouveler') activerNotifs(true);
     U.sync = { ok: true, msg: '', en: false, quand: Date.now() };
     if (!discret) toast(change ? 'Mis à jour' : 'À jour');
   } catch (e) {
@@ -307,6 +318,69 @@ function etatSync() {
   return `<div class="etat-sync" id="etat-sync"><span class="p"></span>${ACCES && ACCES.t ? 'Synchronisé' : 'Fichier'} · données du ${esc(DON.maj ? new Date(DON.maj).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '—')}</div>`;
 }
 
+// ------------------------------------------------------------------ notifications (Web Push)
+// Le téléphone écrit un seul fichier, sync/tel-<id>.json, chiffré avec la clé du coffre : il contient son abonnement.
+// Trousseau sur le PC le lit et envoie les alertes (clé refusée, quota atteint, nouvelle clé), même quand l'app est fermée.
+function monId() { let t = LS.get('tel', null); if (!t) { t = 'tel-' + b64u(crypto.getRandomValues(new Uint8Array(6))).replace(/[^A-Za-z0-9]/g, 'x'); LS.set('tel', t); } return t; }
+const nomTel = () => estIOS ? 'iPhone' : /Android/.test(navigator.userAgent) ? 'Téléphone Android' : 'Téléphone';
+async function ecrireMonFichier(rubriques, A = ACCES, K = CLE) {
+  const id = monId(), chemin = 'sync/' + id + '.json';
+  const contenu = { v: 1, app: 'trousseau', device: id, platform: estIOS ? 'iphone' : /Android/.test(navigator.userAgent) ? 'android' : 'web', nom: nomTel(), updated: Date.now(), version: VERSION, chiffre: await chiffrer(K, rubriques) };
+  const corps = { message: 'Trousseau : ' + nomTel(), content: btoa(unescape(encodeURIComponent(JSON.stringify(contenu)))) };
+  const fichiers = LS.get('fichiers', {});
+  let sha = fichiers[chemin] && fichiers[chemin].sha;
+  for (let essai = 0; essai < 3; essai++) {
+    if (sha) corps.sha = sha; else delete corps.sha;
+    const entetes = { Authorization: 'Bearer ' + A.t, 'X-GitHub-Api-Version': '2022-11-28', Accept: 'application/vnd.github+json' };
+    const r = await fetch(API + '/repos/' + A.d + '/contents/' + chemin, { method: 'PUT', body: JSON.stringify(corps), headers: Object.assign({ 'Content-Type': 'application/json' }, entetes) });
+    if (r.ok) { const j = await r.json(); fichiers[chemin] = { sha: j.content && j.content.sha, contenu }; LS.set('fichiers', fichiers); return true; }
+    if (r.status === 409 || r.status === 422) { const g = await fetch(API + '/repos/' + A.d + '/contents/' + chemin, { cache: 'no-store', headers: entetes }); sha = g.ok ? (await g.json()).sha : null; continue; }
+    throw new Error(r.status === 401 ? 'Accès GitHub refusé.' : r.status === 403 ? 'Le jeton ne permet pas d’écrire.' : 'GitHub ne répond pas (' + r.status + ').');
+  }
+  throw new Error('GitHub refuse l’envoi.');
+}
+const notifPossible = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+function etatNotif() {
+  if (!ACCES || !ACCES.t) return { code: 'fichiers' };
+  if (estIOS && !autonome) return { code: 'installer' };
+  if (!notifPossible()) return { code: 'impossible' };
+  if (!DON.vapid) return { code: 'pc' };
+  const n = LS.get('notif', null);
+  if (n && Notification.permission === 'granted') return { code: n.vapid === DON.vapid ? 'actives' : 'renouveler' };
+  if (Notification.permission === 'denied') return { code: 'refusees' };
+  return { code: 'inactives' };
+}
+async function activerNotifs(silencieux) {
+  try {
+    if (Notification.permission !== 'granted') { const p = await Notification.requestPermission(); if (p !== 'granted') { if (!silencieux) toast('Notifications refusées'); return rendre(); } }
+    const reg = await navigator.serviceWorker.ready;
+    const ancien = await reg.pushManager.getSubscription(); if (ancien) await ancien.unsubscribe().catch(() => {});
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: deb64u(DON.vapid) });
+    const j = sub.toJSON();
+    await ecrireMonFichier({ ['n:' + monId()]: { t: Date.now(), v: { endpoint: j.endpoint, keys: j.keys, vapid: DON.vapid, nom: nomTel() } } });
+    LS.set('notif', { endpoint: j.endpoint, vapid: DON.vapid });
+    if (!silencieux) toast('Notifications activées');
+  } catch (e) { if (!silencieux) toast(e.message || 'Impossible d’activer'); }
+  rendre();
+}
+async function desactiverNotifs() {
+  try {
+    if ('serviceWorker' in navigator) { const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); }
+    if (ACCES && ACCES.t) await ecrireMonFichier({});
+    LS.del('notif'); toast('Notifications coupées');
+  } catch (e) { toast(e.message || 'Erreur'); }
+  rendre();
+}
+function ligneNotif() {
+  const e = etatNotif();
+  if (e.code === 'fichiers') return '';
+  const txt = { installer: 'Ajoute Trousseau à l’écran d’accueil pour les recevoir.', impossible: 'Ce navigateur ne les gère pas.', pc: 'Mets à jour Trousseau sur ton PC (2.3).', refusees: 'Refusées : autorise-les dans Réglages › Notifications › Trousseau.', inactives: '', actives: '', renouveler: '' }[e.code];
+  const bouton = e.code === 'actives' ? `<button class="l" data-act="notif-off" style="min-height:46px"><div class="txt">Notifications</div><div class="fin" style="color:var(--vert)">Activées</div></button>`
+    : (e.code === 'inactives' || e.code === 'renouveler') ? `<button class="l" data-act="notif-on" style="min-height:46px"><div class="txt">Notifications</div><div class="fin" style="color:var(--bleu)">Activer</div></button>`
+    : `<div class="info"><span>Notifications</span><span>—</span></div>`;
+  return `<div class="titre-groupe">Notifications</div><div class="groupe">${bouton}</div><div class="titre-groupe" style="text-transform:none;padding-top:6px">${txt || 'Clé refusée, quota atteint, nouvelle clé : même quand l’app est fermée.'}</div>`;
+}
+
 // ------------------------------------------------------------------ écrans principaux
 function rendre() {
   if (!ACCES) return;
@@ -321,7 +395,7 @@ function barreOnglets() {
 }
 function ligneCle(k, avecAdresse = true) {
   const s = serv(k.service), c = compte(k.compteId);
-  return `<button class="l" data-cle="${esc(k.id)}"><div class="badge" style="background:${s.couleur}">${esc(s.lettre)}</div>
+  return `<button class="l" data-cle="${esc(k.id)}">${pastille(s)}
     <div class="txt"><div class="n">${k.favori ? `<svg class="i etoile"><use href="#i-etoile"/></svg> ` : ''}${esc(k.nom)}</div><div class="s">${esc(avecAdresse ? (c ? (c.nom || c.email) : s.court) : s.nom)}${k.usage ? ' · ' + esc(k.usage) : ''}</div></div>
     <div class="fin"><span class="point ${esc(k.etat ? k.etat.code : '')}"></span>${ic('chevron')}</div></button>`;
 }
@@ -364,6 +438,7 @@ function vueReglages() {
     </div>
     <div class="boutons" style="margin-top:10px">${ACCES.t ? `<button class="btn" data-act="actualiser">${ic('actualiser')} Actualiser</button>` : ''}<button class="btn" data-act="fichier">Ouvrir un fichier…</button></div>
     <input type="file" id="f-fichier" accept=".trousseau-sync,application/json" class="cache">
+    ${ligneNotif()}
     <div class="titre-groupe">Sécurité</div>
     <div class="groupe">
       <label class="info"><span>Verrouiller après</span><span><select class="choix" id="r-verrou">${[[1, '1 minute'], [5, '5 minutes'], [15, '15 minutes'], [30, '30 minutes']].map(([v, t]) => `<option value="${v}" ${v === verrou ? 'selected' : ''}>${t}</option>`).join('')}</select></span></label>
@@ -399,7 +474,7 @@ async function fiche(id) {
   const etats = { ok: 'Fonctionne', quota: 'Quota atteint', invalide: 'Refusée', reseau: 'Hors ligne', erreur: 'Erreur du service', inconnu: 'Non vérifiable' };
   const apercu = k.s.length <= 12 ? '••••' + k.s.slice(-2) : k.s.slice(0, Math.min(7, k.s.length - 6)) + '••••' + k.s.slice(-4);
   $('#feuille').innerHTML = `<div class="voile" data-act="fermer"></div><div class="sheet" role="dialog" aria-label="${esc(k.nom)}"><div class="poignee"></div><button class="ferme" data-act="fermer">OK</button>
-    <div class="tete"><div class="badge grand" style="background:${s.couleur}">${esc(s.lettre)}</div><h2>${esc(k.nom)}</h2><div class="s">${esc(s.nom)}</div></div>
+    <div class="tete">${pastille(s, 'grand')}<h2>${esc(k.nom)}</h2><div class="s">${esc(s.nom)}</div></div>
     <div class="secret mono" id="secret">${esc(apercu)}</div>
     <div class="boutons" style="margin-top:12px"><button class="btn prim" data-act="copier">${ic('copier')} Copier</button><button class="btn" data-act="voir">${ic('oeil')} <span id="voir-t">Afficher</span></button></div>
     <div class="boutons"><button class="btn" data-act="copier-env" style="font-size:15px">Copier ${esc(s.env)}=…</button></div>
@@ -450,6 +525,8 @@ function brancher() {
     });
     p.bas('<button class="lien-bas" id="annuler">Annuler</button>'); $('#annuler').onclick = () => rendre();
   });
+  act('notif-on', () => activerNotifs(false));
+  act('notif-off', () => { if (confirm('Couper les notifications sur ce téléphone ?')) desactiverNotifs(); });
   act('dissocier', () => { if (confirm('Dissocier ce téléphone ? Les clés seront effacées de ce téléphone (elles restent sur ton PC).')) oublier(); });
   act('fichier', () => $('#f-fichier').click());
   const f = $('#f-fichier', a);
